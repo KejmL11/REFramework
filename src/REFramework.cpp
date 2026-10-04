@@ -305,6 +305,12 @@ REFramework::REFramework(HMODULE reframework_module)
 
     IntegrityCheckBypass::fix_virtual_protect();
 
+    // Wilds can run its checks while this thread copies DLLs into _storage_.
+    // Install these patches before filesystem work delays the rest of initialization.
+    if (gi.is_mhwilds()) {
+        IntegrityCheckBypass::patch_dd2_check_constants();
+    }
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 

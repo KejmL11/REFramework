@@ -1379,6 +1379,23 @@ int IntegrityCheckBypass::scan_patch_files_count() {
     return highest_patch_num;
 }
 
+void IntegrityCheckBypass::patch_dd2_check_constants() {
+    const auto game = utility::get_executable();
+    const auto game_size = utility::get_module_size(game).value_or(0);
+    const auto game_end = (uintptr_t)game + game_size;
+    static std::vector<Patch::Ptr> sus_constant_patches{};
+
+    for (auto ref = utility::scan(game, "81 ? E1 53 BD 4C");
+         ref.has_value();
+         ref = utility::scan(*ref + 1, (game_end - (*ref + 1)) - 0x1000, "81 ? E1 53 BD 4C"))
+    {
+        // Patch to 0x1337BEEF. Keep ownership here when called again during normal initialization.
+        sus_constant_patches.emplace_back(Patch::create(*ref + 2, { 0xEF, 0xBE, 0x37, 0x13 }, true));
+    }
+
+    spdlog::info("[IntegrityCheckBypass]: Patched {} sus_constants! (DD2+ variant)", sus_constant_patches.size());
+}
+
 void IntegrityCheckBypass::immediate_patch_dd2() {
     // Just like RE4, this deals with the scans that are done every frame on the game's memory.
     // The scans are still performed, but the crash will be avoided.
@@ -1392,8 +1409,6 @@ void IntegrityCheckBypass::immediate_patch_dd2() {
 
     const auto game = utility::get_executable();
     const auto game_size = utility::get_module_size(game).value_or(0);
-    const auto game_end = (uintptr_t)game + game_size;
-
     const auto& gi = sdk::GameIdentity::get();
     if (gi.tdb_ver() >= 74) {
     init_anti_debug_watcher();
@@ -1503,17 +1518,7 @@ void IntegrityCheckBypass::immediate_patch_dd2() {
         spdlog::error("[IntegrityCheckBypass]: Could not find createBLAS!");
     }
 
-    static std::vector<Patch::Ptr> sus_constant_patches{};
-
-    for (auto ref = utility::scan(game, "81 ? E1 53 BD 4C");
-         ref.has_value();
-         ref = utility::scan(*ref + 1, (game_end - (*ref + 1)) - 0x1000, "81 ? E1 53 BD 4C"))
-    {
-        // Patch to 0x1337BEEF
-        sus_constant_patches.emplace_back(Patch::create(*ref + 2, { 0xEF, 0xBE, 0x37, 0x13 }, true));
-    }
-
-    spdlog::info("[IntegrityCheckBypass]: Patched {} sus_constants! (DD2+ variant)", sus_constant_patches.size());
+    patch_dd2_check_constants();
 
     restore_unencrypted_paks();
     }
