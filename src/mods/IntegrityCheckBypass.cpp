@@ -31,6 +31,7 @@ std::shared_ptr<IntegrityCheckBypass> s_integrity_check_bypass_instance{nullptr}
 // when something launches CrashReport.exe.
 static std::unique_ptr<FunctionHookMinHook> s_create_process_w_probe_hook{};
 static std::unique_ptr<FunctionHookMinHook> s_create_process_a_probe_hook{};
+static std::unique_ptr<FunctionHookMinHook> s_create_process_internal_w_probe_hook{};
 
 static bool contains_crash_report(const wchar_t* s) {
     if (s == nullptr) {
@@ -163,12 +164,96 @@ static BOOL WINAPI create_process_a_probe(
     );
 }
 
+static BOOL WINAPI create_process_internal_w_probe(
+    HANDLE token,
+    LPCWSTR lpApplicationName,
+    LPWSTR lpCommandLine,
+    LPSECURITY_ATTRIBUTES lpProcessAttributes,
+    LPSECURITY_ATTRIBUTES lpThreadAttributes,
+    BOOL bInheritHandles,
+    DWORD dwCreationFlags,
+    LPVOID lpEnvironment,
+    LPCWSTR lpCurrentDirectory,
+    LPSTARTUPINFOW lpStartupInfo,
+    LPPROCESS_INFORMATION lpProcessInformation,
+    HANDLE* newToken
+) {
+    if (contains_crash_report(lpApplicationName) || contains_crash_report(lpCommandLine)) {
+        spdlog::warn(
+            "[CREATEPROCESS-INTERNAL-PROBE]: intercepted CrashReport.exe via CreateProcessInternalW"
+        );
+        log_crash_report_launch_stack("CreateProcessInternalW");
+    }
+
+    return s_create_process_internal_w_probe_hook
+        ->get_original<decltype(create_process_internal_w_probe)>()(
+            token,
+            lpApplicationName,
+            lpCommandLine,
+            lpProcessAttributes,
+            lpThreadAttributes,
+            bInheritHandles,
+            dwCreationFlags,
+            lpEnvironment,
+            lpCurrentDirectory,
+            lpStartupInfo,
+            lpProcessInformation,
+            newToken
+        );
+}
+
 static void install_create_process_probe() {
-    if (s_create_process_w_probe_hook || s_create_process_a_probe_hook) {
+    if (s_create_process_w_probe_hook ||
+        s_create_process_a_probe_hook ||
+        s_create_process_internal_w_probe_hook) {
         return;
     }
 
     spdlog::info("[CREATEPROCESS-PROBE]: installing CreateProcessW/A hooks");
+    spdlog::info("[CREATEPROCESS-INTERNAL-PROBE]: installing CreateProcessInternalW hook");
+
+    HMODULE process_module = GetModuleHandleW(L"kernelbase.dll");
+    FARPROC create_process_internal_w = nullptr;
+
+    if (process_module != nullptr) {
+        create_process_internal_w = GetProcAddress(process_module, "CreateProcessInternalW");
+    }
+
+    if (create_process_internal_w == nullptr) {
+        process_module = GetModuleHandleW(L"kernel32.dll");
+
+        if (process_module != nullptr) {
+            create_process_internal_w = GetProcAddress(process_module, "CreateProcessInternalW");
+        }
+    }
+
+    if (create_process_internal_w == nullptr) {
+        spdlog::error(
+            "[CREATEPROCESS-INTERNAL-PROBE]: CreateProcessInternalW export not found"
+        );
+    } else {
+        spdlog::info(
+            "[CREATEPROCESS-INTERNAL-PROBE]: CreateProcessInternalW @ 0x{:X}",
+            (uintptr_t)create_process_internal_w
+        );
+
+        s_create_process_internal_w_probe_hook =
+            std::make_unique<FunctionHookMinHook>(
+                (uintptr_t)create_process_internal_w,
+                (uintptr_t)create_process_internal_w_probe
+            );
+
+        if (!s_create_process_internal_w_probe_hook->create()) {
+            spdlog::error(
+                "[CREATEPROCESS-INTERNAL-PROBE]: failed to hook CreateProcessInternalW"
+            );
+            s_create_process_internal_w_probe_hook.reset();
+        } else {
+            spdlog::info(
+                "[CREATEPROCESS-INTERNAL-PROBE]: hooked CreateProcessInternalW"
+            );
+        }
+    }
 
     s_create_process_w_probe_hook =
         std::make_unique<FunctionHookMinHook>(CreateProcessW, (uintptr_t)create_process_w_probe);
@@ -200,7 +285,6 @@ std::shared_ptr<IntegrityCheckBypass>& IntegrityCheckBypass::get_shared_instance
 }
 
 std::optional<std::string> IntegrityCheckBypass::on_initialize() {
-    install_create_process_probe();
     // Patterns for assigning or accessing of the integrity check boolean (RE3)
     // and for jumping past the integrity checks (RE8)
     // In RE8, the integrity checks cause a noticeable stutter as well.
@@ -2341,6 +2425,9 @@ void IntegrityCheckBypass::setup_pristine_syscall() {
 
 // hahahah i hate this
 void IntegrityCheckBypass::fix_virtual_protect() try {
+    // Install this diagnostic hook on the early startup path.
+    install_create_process_probe();
+
     spdlog::info("[IntegrityCheckBypass]: Fixing VirtualProtect...");
 
     setup_pristine_syscall(); // Called earlier in DllMain
