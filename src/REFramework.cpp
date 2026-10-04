@@ -110,6 +110,25 @@ void REFramework::hook_monitor() {
             }
 
             if (!m_has_last_chance && now - m_last_chance_time > std::chrono::seconds(1)) {
+                static const bool s_is_wine_or_proton = []() {
+                    const auto ntdll = GetModuleHandleA("ntdll.dll");
+                    return ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+                }();
+
+                if (s_is_wine_or_proton) {
+                    // Diagnostic workaround:
+                    // the initial D3D12 hook succeeded, but REFramework never observes
+                    // Present and repeatedly tears down/recreates its D3D12 hooks.
+                    // Suppress that watchdog rehook on Wine/Proton so we can determine
+                    // whether the rehook loop is responsible for the MH Wilds crash.
+                    spdlog::info("Wine/Proton: suppressing automatic D3D rehook");
+                    m_last_present_time = now;
+                    m_last_message_time = now;
+                    m_last_chance_time = now;
+                    m_has_last_chance = true;
+                    return;
+                }
+
                 spdlog::info("Sending rehook request for D3D");
 
                 // hook_d3d12 always gets called first.
