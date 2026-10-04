@@ -26,6 +26,172 @@ struct IntegrityCheckPattern {
 
 std::shared_ptr<IntegrityCheckBypass> s_integrity_check_bypass_instance{nullptr};
 
+// Diagnostic-only process-launch probe for MH Wilds.
+// It does not block or modify process creation; it only logs the call stack
+// when something launches CrashReport.exe.
+static std::unique_ptr<FunctionHookMinHook> s_create_process_w_probe_hook{};
+static std::unique_ptr<FunctionHookMinHook> s_create_process_a_probe_hook{};
+
+static bool contains_crash_report(const wchar_t* s) {
+    if (s == nullptr) {
+        return false;
+    }
+
+    return wcsstr(s, L"CrashReport") != nullptr ||
+           wcsstr(s, L"crashreport") != nullptr ||
+           wcsstr(s, L"CRASHREPORT") != nullptr;
+}
+
+static bool contains_crash_report(const char* s) {
+    if (s == nullptr) {
+        return false;
+    }
+
+    return strstr(s, "CrashReport") != nullptr ||
+           strstr(s, "crashreport") != nullptr ||
+           strstr(s, "CRASHREPORT") != nullptr;
+}
+
+static void log_crash_report_launch_stack(const char* api_name) {
+    void* frames[48]{};
+    const auto frame_count = RtlCaptureStackBackTrace(1, 48, frames, nullptr);
+
+    const auto game = utility::get_executable();
+    const auto game_base = (uintptr_t)game;
+    const auto game_size = utility::get_module_size(game).value_or(0);
+    const auto game_end = game_base + game_size;
+
+    spdlog::warn(
+        "[CREATEPROCESS-PROBE]: {} is launching CrashReport.exe; captured {} frames",
+        api_name,
+        frame_count
+    );
+
+    for (USHORT i = 0; i < frame_count; ++i) {
+        const auto addr = (uintptr_t)frames[i];
+
+        if (addr >= game_base && addr < game_end) {
+            spdlog::warn(
+                "[CREATEPROCESS-PROBE]: frame #{:02}: 0x{:X} MonsterHunterWilds.exe+0x{:X}",
+                i,
+                addr,
+                addr - game_base
+            );
+            continue;
+        }
+
+        const auto module = utility::get_module_within(addr);
+        if (module) {
+            const auto module_path = utility::get_module_pathw(*module);
+
+            if (module_path) {
+                spdlog::warn(
+                    "[CREATEPROCESS-PROBE]: frame #{:02}: 0x{:X} {}",
+                    i,
+                    addr,
+                    utility::narrow(*module_path)
+                );
+                continue;
+            }
+        }
+
+        spdlog::warn(
+            "[CREATEPROCESS-PROBE]: frame #{:02}: 0x{:X} <unknown module>",
+            i,
+            addr
+        );
+    }
+}
+
+static BOOL WINAPI create_process_w_probe(
+    LPCWSTR lpApplicationName,
+    LPWSTR lpCommandLine,
+    LPSECURITY_ATTRIBUTES lpProcessAttributes,
+    LPSECURITY_ATTRIBUTES lpThreadAttributes,
+    BOOL bInheritHandles,
+    DWORD dwCreationFlags,
+    LPVOID lpEnvironment,
+    LPCWSTR lpCurrentDirectory,
+    LPSTARTUPINFOW lpStartupInfo,
+    LPPROCESS_INFORMATION lpProcessInformation
+) {
+    if (contains_crash_report(lpApplicationName) || contains_crash_report(lpCommandLine)) {
+        log_crash_report_launch_stack("CreateProcessW");
+    }
+
+    return s_create_process_w_probe_hook->get_original<decltype(create_process_w_probe)>()(
+        lpApplicationName,
+        lpCommandLine,
+        lpProcessAttributes,
+        lpThreadAttributes,
+        bInheritHandles,
+        dwCreationFlags,
+        lpEnvironment,
+        lpCurrentDirectory,
+        lpStartupInfo,
+        lpProcessInformation
+    );
+}
+
+static BOOL WINAPI create_process_a_probe(
+    LPCSTR lpApplicationName,
+    LPSTR lpCommandLine,
+    LPSECURITY_ATTRIBUTES lpProcessAttributes,
+    LPSECURITY_ATTRIBUTES lpThreadAttributes,
+    BOOL bInheritHandles,
+    DWORD dwCreationFlags,
+    LPVOID lpEnvironment,
+    LPCSTR lpCurrentDirectory,
+    LPSTARTUPINFOA lpStartupInfo,
+    LPPROCESS_INFORMATION lpProcessInformation
+) {
+    if (contains_crash_report(lpApplicationName) || contains_crash_report(lpCommandLine)) {
+        log_crash_report_launch_stack("CreateProcessA");
+    }
+
+    return s_create_process_a_probe_hook->get_original<decltype(create_process_a_probe)>()(
+        lpApplicationName,
+        lpCommandLine,
+        lpProcessAttributes,
+        lpThreadAttributes,
+        bInheritHandles,
+        dwCreationFlags,
+        lpEnvironment,
+        lpCurrentDirectory,
+        lpStartupInfo,
+        lpProcessInformation
+    );
+}
+
+static void install_create_process_probe() {
+    if (s_create_process_w_probe_hook || s_create_process_a_probe_hook) {
+        return;
+    }
+
+    spdlog::info("[CREATEPROCESS-PROBE]: installing CreateProcessW/A hooks");
+
+    s_create_process_w_probe_hook =
+        std::make_unique<FunctionHookMinHook>(CreateProcessW, (uintptr_t)create_process_w_probe);
+
+    if (!s_create_process_w_probe_hook->create()) {
+        spdlog::error("[CREATEPROCESS-PROBE]: failed to hook CreateProcessW");
+        s_create_process_w_probe_hook.reset();
+    } else {
+        spdlog::info("[CREATEPROCESS-PROBE]: hooked CreateProcessW");
+    }
+
+    s_create_process_a_probe_hook =
+        std::make_unique<FunctionHookMinHook>(CreateProcessA, (uintptr_t)create_process_a_probe);
+
+    if (!s_create_process_a_probe_hook->create()) {
+        spdlog::error("[CREATEPROCESS-PROBE]: failed to hook CreateProcessA");
+        s_create_process_a_probe_hook.reset();
+    } else {
+        spdlog::info("[CREATEPROCESS-PROBE]: hooked CreateProcessA");
+    }
+}
+
+
 std::shared_ptr<IntegrityCheckBypass>& IntegrityCheckBypass::get_shared_instance() {
     if (!s_integrity_check_bypass_instance) {
         s_integrity_check_bypass_instance = std::make_unique<IntegrityCheckBypass>();
@@ -34,6 +200,7 @@ std::shared_ptr<IntegrityCheckBypass>& IntegrityCheckBypass::get_shared_instance
 }
 
 std::optional<std::string> IntegrityCheckBypass::on_initialize() {
+    install_create_process_probe();
     // Patterns for assigning or accessing of the integrity check boolean (RE3)
     // and for jumping past the integrity checks (RE8)
     // In RE8, the integrity checks cause a noticeable stutter as well.
