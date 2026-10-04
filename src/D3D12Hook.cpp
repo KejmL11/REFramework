@@ -150,6 +150,13 @@ void D3D12Hook::hook_streamline(HMODULE dlssg_module) try {
     spdlog::error("[Streamline] Failed to hook Streamline");
 }
 
+// Diagnostic workaround for Wine/Proton.
+// Real Windows ntdll.dll does not export wine_get_version.
+static bool reframework_is_wine() {
+    const auto ntdll = GetModuleHandleA("ntdll.dll");
+    return ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+}
+
 bool D3D12Hook::hook() {
     spdlog::info("Hooking D3D12");
 
@@ -207,7 +214,15 @@ bool D3D12Hook::hook() {
     spdlog::info("Creating dummy device");
 
     // Get the original on-disk bytes of the D3D12CreateDevice export
-    const auto original_bytes = utility::get_original_bytes(d3d12_create_device);
+    auto original_bytes = utility::get_original_bytes(d3d12_create_device);
+
+    // On Wine/Proton, do not temporarily overwrite the live D3D12CreateDevice
+    // implementation. We want to test whether that unhook/rehook sequence is
+    // what triggers the Monster Hunter Wilds startup crash.
+    if (reframework_is_wine()) {
+        spdlog::info("Wine/Proton detected: skipping temporary D3D12CreateDevice unhook/rehook");
+        original_bytes.reset();
+    }
 
     // Temporarily unhook D3D12CreateDevice
     // it allows compatibility with ReShade and other overlays that hook it
