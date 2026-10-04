@@ -2117,12 +2117,95 @@ void IntegrityCheckBypass::remove_stack_destroyer() {
 
     if (!fn) {
         spdlog::error("[IntegrityCheckBypass]: Could not find stack destroyer!");
+
+        // Diagnostic-only probe for newer MH Wilds builds.
+        // IMPORTANT: this block only scans/logs. It does not patch candidates.
+        const auto game_size = utility::get_module_size(game).value_or(0);
+        const auto game_start = (uintptr_t)game;
+        const auto game_end = game_start + game_size;
+
+        auto dump_bytes = [game_start, game_end](uintptr_t addr, size_t before, size_t after) {
+            const uintptr_t start_addr = addr > game_start + before ? addr - before : game_start;
+            const uintptr_t end_addr = addr + after < game_end ? addr + after : game_end;
+
+            std::stringstream ss{};
+            ss << std::hex << std::setfill('0');
+
+            for (uintptr_t p = start_addr; p < end_addr; ++p) {
+                ss << std::setw(2) << (unsigned int)*(uint8_t*)p << ' ';
+            }
+
+            return ss.str();
+        };
+
+        auto probe_pattern = [&](const char* name, const char* pattern, size_t max_results) {
+            size_t count = 0;
+            auto ref = utility::scan(game, pattern);
+
+            while (ref && count < max_results) {
+                spdlog::warn(
+                    "[IntegrityCheckBypass][PROBE]: {} candidate #{} @ 0x{:X}: {}",
+                    name,
+                    count,
+                    *ref,
+                    dump_bytes(*ref, 0x20, 0x60)
+                );
+
+                ++count;
+
+                const auto next = *ref + 1;
+                if (next >= game_end) {
+                    break;
+                }
+
+                ref = utility::scan(next, game_end - next, pattern);
+            }
+
+            spdlog::warn(
+                "[IntegrityCheckBypass][PROBE]: {} total logged: {}",
+                name,
+                count
+            );
+        };
+
+        probe_pattern(
+            "zero-return-address-rex",
+            "48 C7 04 24 00 00 00 00",
+            32
+        );
+
+        probe_pattern(
+            "zero-return-address",
+            "C7 04 24 00 00 00 00",
+            32
+        );
+
+        probe_pattern(
+            "add-rsp-imm32-ret",
+            "48 81 C4 ? ? ? ? C3",
+            32
+        );
+
+        probe_pattern(
+            "add-rsp-imm8-ret",
+            "48 83 C4 ? C3",
+            32
+        );
+
+        probe_pattern(
+            "mov-rcx-rdx",
+            "48 89 11",
+            32
+        );
+
+        spdlog::warn(
+            "[IntegrityCheckBypass][PROBE]: runtime probe complete; NO candidate was patched."
+        );
+
         return;
     }
 
-    // Create a patch that returns instantly.
     static auto patch = Patch::create(*fn, { 0xC3 }, true);
-
     spdlog::info("[IntegrityCheckBypass]: Patched stack destroyer!");
 }
 
