@@ -1,0 +1,69 @@
+name: MH Wilds 01433 early integrity fix
+
+on:
+  push:
+    branches: [mhw-early-integrity-01433]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out reviewed patch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: patch-input
+          persist-credentials: false
+
+      - name: Check out official Nightly 01433 source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: praydog/REFramework
+          ref: d4611aef1d63effd3a736bdf9404ea702428017d
+          path: upstream
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply early integrity initialization fix
+        run: |
+          git -C upstream apply --check "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C upstream apply "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C upstream diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C upstream diff --stat
+
+      - name: Audit direct struct field access
+        working-directory: upstream
+        run: |
+          pip install libclang
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python dev/audit_direct_access_clang.py
+
+      - name: Configure CMake
+        run: cmake -S upstream -B build -G "Visual Studio 18 2026" -A x64 -DCMAKE_BUILD_TYPE=Release -DDEVELOPER_MODE=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build patched DLL
+        run: cmake --build build --config Release --target REFramework
+
+      - name: Package patched DLL
+        run: |
+          @"
+          Upstream: d4611aef1d63effd3a736bdf9404ea702428017d (Nightly 01433)
+          Patch input commit: $env:GITHUB_SHA
+          Fix: apply Wilds integrity marker patches before DLL copying
+          Install only dinput8.dll with the game closed; preserve existing scripts and settings.
+          "@ | Set-Content -Encoding utf8 build-info.txt
+          Compress-Archive -Path build/bin/REFramework/dinput8.dll,build-info.txt -DestinationPath REFramework-01433-early-integrity.zip
+
+      - name: Upload patched build
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: REFramework-01433-early-integrity
+          path: REFramework-01433-early-integrity.zip
+          if-no-files-found: error

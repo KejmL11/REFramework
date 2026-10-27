@@ -1,0 +1,81 @@
+diff --git a/src/REFramework.cpp b/src/REFramework.cpp
+--- a/src/REFramework.cpp
++++ b/src/REFramework.cpp
+@@ -297,6 +297,12 @@
+     const auto pre_allocated_buffer = (uintptr_t)AllocateBuffer((LPVOID)halfway_module); // minhook function
+     spdlog::info("Preallocated buffer: {:x}", pre_allocated_buffer);
+     IntegrityCheckBypass::fix_virtual_protect();
++
++    // Wilds can run its checks while DLLs are copied into _storage_.
++    // Apply the existing markers before filesystem work delays initialization.
++    if (gi.is_mhwilds()) {
++        IntegrityCheckBypass::patch_dd2_check_constants();
++    }
+ 
+     IMGUI_CHECKVERSION();
+     ImGui::CreateContext();
+diff --git a/src/mods/IntegrityCheckBypass.cpp b/src/mods/IntegrityCheckBypass.cpp
+--- a/src/mods/IntegrityCheckBypass.cpp
++++ b/src/mods/IntegrityCheckBypass.cpp
+@@ -1164,6 +1164,23 @@
+ 
+     return highest_patch_num;
+ }
++void IntegrityCheckBypass::patch_dd2_check_constants() {
++    const auto game = utility::get_executable();
++    const auto game_size = utility::get_module_size(game).value_or(0);
++    const auto game_end = (uintptr_t)game + game_size;
++    static std::vector<Patch::Ptr> sus_constant_patches{};
++
++    for (auto ref = utility::scan(game, "81 ? E1 53 BD 4C");
++         ref.has_value();
++         ref = utility::scan(*ref + 1, (game_end - (*ref + 1)) - 0x1000, "81 ? E1 53 BD 4C"))
++    {
++        // Patch to 0x1337BEEF
++        sus_constant_patches.emplace_back(Patch::create(*ref + 2, { 0xEF, 0xBE, 0x37, 0x13 }, true));
++    }
++
++    spdlog::info("[IntegrityCheckBypass]: Patched {} sus_constants! (DD2+ variant)", sus_constant_patches.size());
++}
++
+ void IntegrityCheckBypass::immediate_patch_dd2() {
+     // Just like RE4, this deals with the scans that are done every frame on the game's memory.
+     // The scans are still performed, but the crash will be avoided.
+@@ -1176,7 +1193,6 @@
+     spdlog::info("[IntegrityCheckBypass]: Scanning DD2...");
+     const auto game = utility::get_executable();
+     const auto game_size = utility::get_module_size(game).value_or(0);
+-    const auto game_end = (uintptr_t)game + game_size;
+ 
+     const auto& gi = sdk::GameIdentity::get();
+     if (gi.tdb_ver() >= 74) {
+@@ -1274,17 +1290,7 @@
+     } else {
+         spdlog::error("[IntegrityCheckBypass]: Could not find createBLAS!");
+     }
+-    static std::vector<Patch::Ptr> sus_constant_patches{};
+-
+-    for (auto ref = utility::scan(game, "81 ? E1 53 BD 4C");
+-         ref.has_value();
+-         ref = utility::scan(*ref + 1, (game_end - (*ref + 1)) - 0x1000, "81 ? E1 53 BD 4C"))
+-    {
+-        // Patch to 0x1337BEEF
+-        sus_constant_patches.emplace_back(Patch::create(*ref + 2, { 0xEF, 0xBE, 0x37, 0x13 }, true));
+-    }
+-
+-    spdlog::info("[IntegrityCheckBypass]: Patched {} sus_constants! (DD2+ variant)", sus_constant_patches.size());
++    patch_dd2_check_constants();
+     restore_unencrypted_paks();
+     }
+ 
+diff --git a/src/mods/IntegrityCheckBypass.hpp b/src/mods/IntegrityCheckBypass.hpp
+--- a/src/mods/IntegrityCheckBypass.hpp
++++ b/src/mods/IntegrityCheckBypass.hpp
+@@ -30,6 +30,7 @@
+     static void immediate_patch_re8();
+     static void immediate_patch_re4();
+     static void immediate_patch_dd2();
++    static void patch_dd2_check_constants();
+     static void immediate_patch_re9();
+     static void re9_heartbeat_bypass();
+     static void remove_stack_destroyer();
