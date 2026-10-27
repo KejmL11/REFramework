@@ -33,13 +33,15 @@ jobs:
 
       - name: Apply early integrity initialization fix
         run: |
-          git -C upstream apply --check --ignore-whitespace "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C upstream apply --ignore-whitespace "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C upstream diff --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C upstream diff --stat
+          python patch-input/scripts/apply_wilds_early_integrity.py --source upstream --diff applied-early-integrity.patch
+
+      - name: Upload applied source diff
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: applied-early-integrity-diff
+          path: applied-early-integrity.patch
+          if-no-files-found: ignore
 
       - name: Audit direct struct field access
         working-directory: upstream
