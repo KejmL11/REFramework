@@ -12,6 +12,9 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
+      - name: Keep source checkouts on LF line endings
+        run: git config --global core.autocrlf false
+
       - name: Check out reviewed patch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -30,9 +33,9 @@ jobs:
 
       - name: Apply early integrity initialization fix
         run: |
-          git -C upstream apply --check "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
+          git -C upstream apply --check --ignore-whitespace "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C upstream apply "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
+          git -C upstream apply --ignore-whitespace "$env:GITHUB_WORKSPACE/patch-input/.github/patches/early-integrity-01433.patch"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git -C upstream diff --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
