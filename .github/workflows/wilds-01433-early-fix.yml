@@ -1,8 +1,8 @@
-name: MH Wilds 01433 startup diagnostics
+name: MH Wilds early PAK diagnostics
 
 on:
   push:
-    branches: [mhw-early-integrity-01433]
+    branches: [mhw-early-pak-01433]
   workflow_dispatch:
 
 permissions:
@@ -54,6 +54,17 @@ jobs:
           path: applied-dxgi-diagnostics.patch
           if-no-files-found: ignore
 
+      - name: Install PAK hooks before DLL staging
+        run: python patch-input/scripts/apply_wilds_pak_early.py --source upstream --diff applied-pak-early.patch
+
+      - name: Upload PAK source diff
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: applied-pak-early-diff
+          path: applied-pak-early.patch
+          if-no-files-found: ignore
+
       - name: Audit direct struct field access
         working-directory: upstream
         run: |
@@ -76,15 +87,15 @@ jobs:
           @"
           Upstream: d4611aef1d63effd3a736bdf9404ea702428017d (Nightly 01433)
           Patch input commit: $env:GITHUB_SHA
-          Fix: apply Wilds integrity marker patches before DLL copying
+          Fix: install Wilds integrity markers and PAK hooks before DLL copying
           Diagnostics: log dummy-window and DXGI calls; optional REFRAMEWORK_MHWILDS_DESKTOP_FIRST=1 changes fallback order
           Install only dinput8.dll with the game closed; preserve existing scripts and settings.
           "@ | Set-Content -Encoding utf8 build-info.txt
-          Compress-Archive -Path build/bin/REFramework/dinput8.dll,build-info.txt -DestinationPath REFramework-01433-startup-diagnostics.zip
+          Compress-Archive -Path build/bin/REFramework/dinput8.dll,build-info.txt -DestinationPath REFramework-01433-early-pak-diagnostics.zip
 
       - name: Upload patched build
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
-          name: REFramework-01433-startup-diagnostics
-          path: REFramework-01433-startup-diagnostics.zip
+          name: REFramework-01433-early-pak-diagnostics
+          path: REFramework-01433-early-pak-diagnostics.zip
           if-no-files-found: error
