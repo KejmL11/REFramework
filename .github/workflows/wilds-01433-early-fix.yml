@@ -43,17 +43,6 @@ jobs:
           path: applied-early-integrity.patch
           if-no-files-found: ignore
 
-      - name: Instrument DXGI startup stall
-        run: python patch-input/scripts/instrument_wilds_dxgi.py --source upstream --diff applied-dxgi-diagnostics.patch
-
-      - name: Upload DXGI diagnostic source diff
-        if: always()
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
-        with:
-          name: applied-dxgi-diagnostics-diff
-          path: applied-dxgi-diagnostics.patch
-          if-no-files-found: ignore
-
       - name: Install PAK hooks before DLL staging
         run: python patch-input/scripts/apply_wilds_pak_early.py --source upstream --diff applied-pak-early.patch
 
@@ -88,7 +77,7 @@ jobs:
           Upstream: d4611aef1d63effd3a736bdf9404ea702428017d (Nightly 01433)
           Patch input commit: $env:GITHUB_SHA
           Fix: install Wilds integrity markers and PAK hooks before DLL copying
-          Diagnostics: log dummy-window and DXGI calls; optional REFRAMEWORK_MHWILDS_DESKTOP_FIRST=1 changes fallback order
+          Diagnostics: log early archive hook installation; retain stock DXGI initialization
           Install only dinput8.dll with the game closed; preserve existing scripts and settings.
           "@ | Set-Content -Encoding utf8 build-info.txt
           Compress-Archive -Path build/bin/REFramework/dinput8.dll,build-info.txt -DestinationPath REFramework-01433-early-pak-diagnostics.zip
